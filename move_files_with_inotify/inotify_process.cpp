@@ -1,0 +1,478 @@
+#include <sys/inotify.h>
+#include <errno.h>
+#include <stdio.h>
+#include <linux/types.h>
+#include <vector>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <string>
+#include <string.h>
+#include <cstdlib>
+#include <iostream>
+#include <list>
+#include <fstream>
+#include <dirent.h>
+#include "inotify_process.h"
+
+#define PERM_FILE (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+
+/*Default Constructor*/
+inotify_process::inotify_process(){max_size=6;drpc="DRPC_MM_DR_";fepc1="FEPC1_MM_FE_";fepc2="FEPC2_MM_FE_";fepc3="FEPC3_MM_FE_";fepc4="FEPC4_MM_FE_";drpc_min=0;fepc1_min=0;fepc2_min=0;fepc3_min=0;fepc4_min=0;}
+
+void inotify_process::processHist(std::vector<std::string> event_timing_vec, int max_size)
+{
+  std::cerr << "size of vector is " << event_timing_vec.size() << std::endl;
+  //If all the vectors are full (6 entries)
+  if((DR_DRAssembler_START.size()==max_size) && (FE1_RATAssembler_START.size()==max_size) && (FE2_RATAssembler_START.size()==max_size) && (FE3_RATAssembler_START.size()==max_size) && (FE4_RATAssembler_START.size()==max_size))
+    {
+      for(int i=0;i<max_size;i++)
+	{
+	  std::cerr << DR_DRAssembler_START[i] << std::endl;
+	  processFiles(DR_DRAssembler_START[i],i);
+	}
+      for(int i=0;i<max_size;i++)
+	{
+	  std::cerr << FE1_RATAssembler_START[i] << std::endl;
+	  processFiles(FE1_RATAssembler_START[i],i);
+	}
+      for(int i=0;i<max_size;i++)
+	{
+	  std::cerr << FE2_RATAssembler_START[i] << std::endl;
+	  processFiles(FE2_RATAssembler_START[i],i);
+	}
+      for(int i=0;i<max_size;i++)
+	{
+	  std::cerr << FE3_RATAssembler_START[i] << std::endl;
+	  processFiles(FE3_RATAssembler_START[i],i);
+	}
+      for(int i=0;i<max_size;i++)
+	{
+	  std::cerr << FE4_RATAssembler_START[i] << std::endl;
+	  processFiles(FE4_RATAssembler_START[i],i);
+	}
+    }
+}
+
+/* Function 'processFiles' moves the 6 relevant root files into another directory */
+  
+void inotify_process::processFiles(std::string plot_type, int file_index)
+{
+  std::string original_plot_type;
+  std::string new_plot_type;
+  std::string path="/home/mcalpha/ROOT_Files/";
+  original_plot_type.assign(plot_type);
+  original_plot_type.insert(0,path);
+  std::string newpath = "/home/mcalpha/ROOT_Files_Website/";
+  new_plot_type.assign(plot_type);
+  new_plot_type.insert(0,newpath);
+
+  int fd1;
+  int fd2;
+  int status;
+  ssize_t read_return;
+  ssize_t write_return;
+
+  /* Get the size of the file that was moved to that directory */
+  struct stat stat_buf;
+
+  status = stat(original_plot_type.c_str(),&stat_buf);
+
+  //Problem: at run-time it still doesn't know how much space to allocate I think
+  char *buffer = new char[stat_buf.st_size];
+  if(buffer==NULL)
+    {
+      std::cerr << "Space not allocated for file." << std::endl;
+    }
+
+  /* Open the file */
+  fd1 = open(original_plot_type.c_str(), O_RDONLY);
+    
+  /*  Create file in other directory */
+  fd2 = open(new_plot_type.c_str(), O_WRONLY | O_CREAT, PERM_FILE);
+    
+  /* Read from the file to buffer */
+  /* Write from the buffer to the file in the other directory */
+  size_t nbytes = 256; //magic number
+  size_t bytes_read = 0;
+  while(bytes_read<(stat_buf.st_size+nbytes))
+    {
+      read_return = read(fd1, buffer, nbytes);
+      write_return = write(fd2, buffer, nbytes);
+      bytes_read+=nbytes;
+    }
+    
+  /* Remove original file */
+  unlink(original_plot_type.c_str());
+
+  delete[] buffer;
+
+  /* Clear relevant vector and start over */
+
+  if((plot_type.compare(0,11,drpc)==0)&&(file_index==(max_size-1)))
+    {
+      std::cerr << "drpc histogram vector cleared" << std::endl;
+      DR_DRAssembler_START.clear();
+    }
+  if((plot_type.compare(0,13,fepc1)==0)&&(file_index==(max_size-1)))
+    {
+      std::cerr << "fepc1 histogram vector cleared" << std::endl;
+      FE1_RATAssembler_START.clear();
+    }
+  if((plot_type.compare(0,13,fepc2)==0)&&(file_index==(max_size-1)))
+    {
+      std::cerr << "fepc2 histogram vector cleared" << std::endl;
+      FE2_RATAssembler_START.clear();
+    }
+  if((plot_type.compare(0,13,fepc3)==0)&&(file_index==(max_size-1)))
+    {
+      std::cerr << "fepc3 histogram vector cleared" << std::endl;
+      FE3_RATAssembler_START.clear();
+    }
+  if((plot_type.compare(0,13,fepc4)==0)&&(file_index==(max_size-1)))
+    {
+      std::cerr << "fepc2 histogram vector cleared" << std::endl;
+      FE4_RATAssembler_START.clear();
+    }
+
+}
+
+/* Function 'notify' sits on the ROOT_Files_test directory waiting for new files to appear there */
+
+void inotify_process::notify()
+{
+  int fd;
+  int wd;
+    
+  fd=inotify_init();
+  if(fd<0)
+    perror("inotify_init()");
+  else
+    printf("%d\n",fd);
+
+  std::string path="/home/mcalpha/ROOT_Files";
+
+  /* Look for new files being moved into this directory */
+  wd = inotify_add_watch(fd,path.c_str(),IN_CREATE);
+  if(wd<0)
+    perror("inotify_add_watch");
+
+  int safe = 1024;
+  int read_return1;
+  ssize_t read_return2;
+    
+  std::string event_name;
+    
+  size_t nbytes = (sizeof(struct inotify_event)+16)*safe;
+  //struct inotify_event *ptr;
+  //ptr = (struct inotify_event *) malloc(sizeof(struct inotify_event)*safe);
+
+  char ptr[nbytes];
+  if(ptr==NULL)
+    {
+      exit(1);
+    }
+
+  read_return1=read(fd,ptr,(sizeof(struct inotify_event)+16)*safe);
+  if (read_return1<0){
+    if(errno == EINTR)
+      {
+      }
+    else
+      {
+	perror("read");
+      }
+  }
+    else if (!read_return1)
+    {
+
+    }
+  
+  /*  while(read_return1<0)
+    {
+      /* Resize the memory allocation for the event struct in case the name of the file is too long*/
+  /*      printf("Errno: %d %s\n",errno,strerror(errno));
+      ptr = (struct inotify_event *) realloc(ptr,sizeof(struct inotify_event)+(n*safe));
+      read_return1=read(fd,ptr,sizeof(struct inotify_event)+(n*safe));
+      n++;
+    }*/
+  int i=0;
+  int timestamp;
+
+  std::cerr << read_return1 << std::endl;
+  while(i<read_return1)
+    {
+      struct inotify_event *event;
+      event = (struct inotify_event *) &ptr[i];
+
+      event_name.assign(event->name);
+      std::cerr << event_name << std::endl;
+      addToVector(event_name);
+      std::cerr << event->len << std::endl;
+      i += (sizeof(struct inotify_event))+(event->len);
+      event_name.clear();
+    }
+  std::cerr << "exited loop" << std::endl;
+  //close(wd);
+  //close(fd);
+  //free(ptr);
+}
+
+/* Function 'getTimestamp' strips irrelevant info from the file name to return timestamp */
+
+int inotify_process::getTimestamp(std::string event_name)
+{
+  int timestamp_begin;
+  size_t file_end;
+  int timestamp=0;
+  file_end=event_name.find(".root",0,5);
+  if(file_end!=std::string::npos)
+    event_name.erase(file_end);
+  timestamp_begin=event_name.find_last_of("_");
+  if(timestamp_begin!=std::string::npos)
+    {
+      event_name.erase(0,timestamp_begin+1);
+      timestamp=atoi(event_name.c_str());
+    }
+  return timestamp;
+}
+
+/* Function 'addToVector' pushes back the file name onto the appropriate vector */  
+
+void inotify_process::addToVector(std::string event_name)
+{
+  int timestamp;
+  timestamp=getTimestamp(event_name);
+
+  if(timestamp!=0)
+    {
+      getAllFiles();
+
+      if(event_name.compare(0,11,drpc)==0)
+	{
+	  std::cerr << "File starts with 'DRPC' string." << std::endl;
+	  //Check to make sure you actually have the smallest timestamp
+	  if(timestamp<=drpc_min)
+	    {
+	      std::cerr << "The file also has the lowest timestamp for drpc." << std::endl;
+	      //Guarantees that all the elements in the vector have the same timestamp
+	      if(DR_DRAssembler_START.empty())
+		{
+		  dr_hist_timestamp = timestamp;
+		  DR_DRAssembler_START.push_back(event_name);
+		  processHist(DR_DRAssembler_START,max_size);
+		}
+	      else if(timestamp==dr_hist_timestamp)
+		{
+		  DR_DRAssembler_START.push_back(event_name);
+		  processHist(DR_DRAssembler_START,max_size);
+		}
+	      else
+		{
+		  DR_DRAssembler_START.clear();
+		  dr_hist_timestamp = timestamp;
+		  DR_DRAssembler_START.push_back(event_name);
+		  processHist(DR_DRAssembler_START,max_size);
+		}
+	    }
+	}
+      else if(event_name.compare(0,12,fepc1)==0)
+	{
+	  std::cerr << "File starts with 'FEPC1' string." << std::endl;
+	  //Check to make sure you actually have the smallest timestamp
+	  if(timestamp<=fepc1_min)
+	    {
+	      std::cerr << "The file also has the lowest timestamp for fepc1." << std::endl;
+	      //Guarantees that all the elements in the vector have the same timestamp
+	      if(FE1_RATAssembler_START.empty())
+		{
+		  fe1_hist_timestamp=timestamp;
+		  FE1_RATAssembler_START.push_back(event_name);
+		  processHist(FE1_RATAssembler_START,max_size);
+		}
+	      else if(timestamp==fe1_hist_timestamp)
+		{
+		  FE1_RATAssembler_START.push_back(event_name);
+		  processHist(FE1_RATAssembler_START,max_size);
+		}
+	      else
+		{
+		  FE1_RATAssembler_START.clear();
+		  fe1_hist_timestamp = timestamp;
+		  FE1_RATAssembler_START.push_back(event_name);
+		  processHist(FE1_RATAssembler_START,max_size);
+		}		
+	    }
+	}
+      else if(event_name.compare(0,12,fepc2)==0)
+	{
+	  std::cerr << "File starts with 'FEPC2' string." << std::endl;
+	  if(timestamp<=fepc2_min)
+	    {
+	      std::cerr << "The file also has the lowest timestamp for fepc2." << std::endl;
+	      //Guarantees that all the elements in the vector have the same timestamp
+	      if(FE2_RATAssembler_START.empty())
+		{
+		  fe2_hist_timestamp=timestamp;
+		  FE2_RATAssembler_START.push_back(event_name);
+		  processHist(FE2_RATAssembler_START,max_size);
+		}
+	      else if(timestamp==fe2_hist_timestamp)
+		{
+		  FE2_RATAssembler_START.push_back(event_name);
+		  processHist(FE2_RATAssembler_START,max_size);
+		}
+	      else
+		{
+		  FE2_RATAssembler_START.clear();
+		  fe2_hist_timestamp = timestamp;
+		  FE2_RATAssembler_START.push_back(event_name);
+		  processHist(FE2_RATAssembler_START,max_size);
+		}
+	    }
+	}
+      else if(event_name.compare(0,12,fepc3)==0)
+	{
+	  std::cerr << "File starts with 'FEPC3' string." << std::endl;
+	  if(timestamp<=fepc3_min)
+	    {
+	      std::cerr << "The file also has the lowest timestamp for fepc3." << std::endl;
+	      //Guarantees that all the elements in the vector have the same timestamp
+	      if(FE3_RATAssembler_START.empty())
+		{
+		  fe3_hist_timestamp=timestamp;
+		  FE3_RATAssembler_START.push_back(event_name);
+		  processHist(FE3_RATAssembler_START,max_size);
+		}
+	      else if(fe3_hist_timestamp==timestamp)
+		{
+		  FE3_RATAssembler_START.push_back(event_name);
+		  processHist(FE3_RATAssembler_START,max_size);
+		}
+	      else
+		{
+		  FE3_RATAssembler_START.clear();
+		  fe3_hist_timestamp = timestamp;
+		  FE3_RATAssembler_START.push_back(event_name);
+		  processHist(FE3_RATAssembler_START,max_size);
+		}
+	    }
+	}
+      else if(event_name.compare(0,12,fepc4)==0)
+	{
+	  std::cerr << "File starts with 'FEPC4' string." << std::endl;
+	  if(timestamp<=fepc4_min)
+	    {
+	      std::cerr << "The file also has the lowest timestamp for fepc4." << std::endl;
+	      //Guarantees that all the elements in the vector have the same timestamp
+	      if(FE4_RATAssembler_START.empty())
+		{
+		  fe4_hist_timestamp=timestamp;
+		  FE4_RATAssembler_START.push_back(event_name);
+		  processHist(FE4_RATAssembler_START,max_size);
+		}
+	      else if(timestamp==fe4_hist_timestamp)
+		{
+		  FE4_RATAssembler_START.push_back(event_name);
+		  processHist(FE4_RATAssembler_START,max_size);
+		}
+	      else
+		{
+		  FE4_RATAssembler_START.clear();
+		  fe4_hist_timestamp = timestamp;
+		  FE4_RATAssembler_START.push_back(event_name);
+		  processHist(FE4_RATAssembler_START,max_size);
+		}	
+	    }
+	}
+    }
+}
+
+/* Function 'getAllFiles' checks the directory to make sure that there are no files with lower timestamps already existing in the directory */
+    
+int inotify_process::getAllFiles()
+{
+  int file_timestamp;
+
+  DIR *dir;
+  struct dirent *ent;
+  dir = opendir("/home/mcalpha/ROOT_Files");
+  if (dir != NULL) {
+    /* Print all the files and directories within a directory */
+    while ((ent = readdir (dir)) != NULL){
+      std::string filename;
+      filename.assign(ent->d_name);
+      if(filename.compare(0,11,drpc)==0)
+	{
+	  file_timestamp=getTimestamp(filename);
+	  drpc_files.push_back(file_timestamp);
+	}
+      if(filename.compare(0,12,fepc1)==0)
+	{
+	  file_timestamp=getTimestamp(filename);
+	  fepc1_files.push_back(file_timestamp);
+	}
+      if(filename.compare(0,12,fepc2)==0)
+	{
+	  file_timestamp=getTimestamp(filename);
+	  fepc2_files.push_back(file_timestamp);
+	}
+      if(filename.compare(0,12,fepc3)==0)
+	{
+	  file_timestamp=getTimestamp(filename);
+	  fepc3_files.push_back(file_timestamp);
+	}
+      if(filename.compare(0,12,fepc3)==0)
+	{
+	  file_timestamp=getTimestamp(filename);
+	  fepc4_files.push_back(file_timestamp);
+	}
+    }
+    closedir(dir);
+  }
+  else{
+    /*Could not open directory*/
+    perror("");
+    return EXIT_FAILURE;
+  }
+    
+  drpc_files.sort();
+  fepc1_files.sort();
+  fepc2_files.sort();
+  fepc3_files.sort();
+  fepc4_files.sort();
+    
+  std::list<int>::iterator it1;
+  std::list<int>::iterator it2;
+  std::list<int>::iterator it3;
+  std::list<int>::iterator it4;
+  std::list<int>::iterator it5;
+    
+  //The one at the end of the list will be the smallest timestamp
+  it1=drpc_files.begin();
+  drpc_min=*it1;
+  it2=fepc1_files.begin();
+  fepc1_min=*it2;
+  it3=fepc2_files.begin();
+  fepc2_min=*it3;
+  it4=fepc3_files.begin();
+  fepc3_min=*it4;
+  it5=fepc4_files.begin();
+  fepc4_min=*it5;
+
+  if(drpc_files.empty()==0)
+    std::cerr << "The drpc minimum timestamp is: " << drpc_min << std::endl;
+  if(fepc1_files.empty()==0)
+    std::cerr << "The fepc1 minimum timestamp is: " << fepc1_min << std::endl;
+  if(fepc2_files.empty()==0)
+    std::cerr << "The fepc2 minimum timestamp is: " << fepc2_min << std::endl;
+  if(fepc3_files.empty()==0)
+    std::cerr << "The fepc3 minimum timestamp is: " << fepc3_min << std::endl;
+  if(fepc4_files.empty()==0)
+    std::cerr << "The fepc4 minimum timestamp is: " << fepc4_min << std::endl;
+
+  return 0;
+}
+
+

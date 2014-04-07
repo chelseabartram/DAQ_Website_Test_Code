@@ -1,0 +1,35 @@
+LANG=CPP
+
+CXX= g++
+LD= g++
+CXXFLAGS  += -g -O2
+LDFLAGS   += -g -O2
+
+#------------------------------------------------------------------------------
+
+MV_HIST_FILES	= mv_hist_files
+MV_HIST_FILESO	= $(MV_HIST_FILES).o
+MV_HIST_FILESS	= $(MV_HIST_FILES).cpp
+
+OBJS          = $(MV_HIST_FILESO)
+PROGRAMS      = $(MV_HIST_FILES)
+
+#------------------------------------------------------------------------------
+
+all:            $(PROGRAMS)
+
+$(MV_HIST_FILES):	$(MV_HIST_FILESO)
+		$(LD) $(LDFLAGS) $^ $(GLIBS) -o $@
+		@echo "$@ done"
+
+
+clean:
+		@rm -f $(OBJS)
+
+distclean:      clean
+		@rm -f $(PROGRAMS)
+
+###
+
+.cpp.o:
+	$(CXX) $(CXXFLAGS) -c $< -o $@
